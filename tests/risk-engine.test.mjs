@@ -1,0 +1,15 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import ts from 'typescript';
+import {readFileSync} from 'node:fs';
+const load=async name=>{const source=readFileSync(new URL('../lib/'+name+'.ts',import.meta.url),'utf8');const js=ts.transpileModule(source,{compilerOptions:{module:ts.ModuleKind.ESNext,target:ts.ScriptTarget.ES2022}}).outputText;return import('data:text/javascript;base64,'+Buffer.from(js).toString('base64'))};
+const {total,quantify,optimize,simulate,forecast}=await load('risk');const {demo}=await load('demo');
+test('expected loss is incident frequency times non-overlapping severity',()=>{const r=quantify(demo).find(r=>r.id==='r1');const expected=.7*1.48*1.5*.65*(5/3)*25000000;assert.ok(Math.abs(r.eal-expected)<1e-6);assert.ok(Math.abs(r.likelihood-(1-Math.exp(-r.lambda)))<1e-10)});
+test('overlapping controls compound, not add',()=>{const base=quantify(demo).find(r=>r.id==='r3').eal;const actual=quantify(demo,['patch','edr']).find(r=>r.id==='r3').eal;assert.ok(Math.abs(actual-base*.88*.6)<1e-6)});
+test('full-year delay eliminates first-year benefit',()=>assert.equal(total(demo,['patch','mfa'],365),total(demo)));
+test('optimizer respects zero and constrained budgets and global optimum',()=>{assert.deepEqual(optimize(demo,0),{ids:[],cost:0,reduction:0});const b=1e7,best=optimize(demo,b);assert.ok(best.cost<=b);for(let i=0;i<2**demo.actions.length;i++){const actions=demo.actions.filter((_,n)=>i&(1<<n));if(actions.reduce((s,a)=>s+a.cost,0)<=b)assert.ok(total(demo)-total(demo,actions.map(a=>a.id))<=best.reduction+1e-6)}});
+test('Monte Carlo is reproducible, ordered, and approximates analytical mean',()=>{const s=simulate(demo,[],15000);assert.deepEqual(s,simulate(demo,[],15000));assert.ok(s.p50<=s.p95&&s.p95<=s.p99);assert.ok(Math.abs(s.mean-total(demo))/total(demo)<.06)});
+test('more budget cannot worsen best achievable loss reduction',()=>{let last=0;for(let b=0;b<=2e7;b+=1e6){const r=optimize(demo,b).reduction;assert.ok(r>=last);last=r}});
+test('forecast requires separated data and extrapolates a linear trend',()=>{assert.equal(forecast([]),null);const p=forecast([{createdAt:'2026-01-01',eal:100},{createdAt:'2026-01-02',eal:200},{createdAt:'2026-01-03',eal:300}]);assert.equal(p.value,3300)});
+const {classify}=await load('intent');
+test('local intent model recognizes the four supported decision tasks',()=>{assert.equal(classify('What is our highest financial cyber risk?').intent,'risk');assert.equal(classify('What if we implement privileged MFA?').intent,'mfa');assert.equal(classify('Which investments fit our budget?').intent,'budget');assert.equal(classify('What is the impact of a 30-day delay?').intent,'delay');assert.equal(classify('Tell me a joke').intent,'unknown')});
